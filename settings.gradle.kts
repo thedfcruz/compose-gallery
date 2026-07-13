@@ -24,4 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "compose-gallery"
 include(":sample")
- 
+include(":compose-gallery-annotations")
