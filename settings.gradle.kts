@@ -26,3 +26,4 @@ rootProject.name = "compose-gallery"
 include(":sample")
 include(":compose-gallery-annotations")
 include(":compose-gallery-protocol")
+include(":compose-gallery-ksp")
