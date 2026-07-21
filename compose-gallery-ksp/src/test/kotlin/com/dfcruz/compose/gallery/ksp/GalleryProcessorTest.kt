@@ -101,6 +101,177 @@ class GalleryProcessorTest {
         assertEquals("Settings", metadata.previews[1].name)
     }
 
+
+    @Test
+    fun `generates metadata for Preview meta annotation`() {
+        val metadata = generateMetadata(
+            fileName = "Screens.kt",
+            source = """
+                package com.dfcruz.testapp
+
+                import androidx.compose.ui.tooling.preview.Preview
+                import com.dfcruz.compose.gallery.annotations.Gallery
+                
+                @Preview(
+                    name = "small font",
+                    fontScale = 0.5f
+                )
+                @Preview(
+                    name = "large font",
+                    fontScale = 1.5f
+                )
+                annotation class FontScalePreviews
+
+                @Gallery(name = "Buttons", group = "buttons")
+                @FontScalePreviews
+                fun ButtonPreview() {}
+            """
+        )
+
+        val preview = metadata.previews.single()
+
+        assertEquals(1, metadata.previews.size)
+
+        assertEquals("Buttons", metadata.previews[0].name)
+
+        assertPreviewVariant(
+            preview.variants[0],
+            expectedName = "small font",
+            fontScale = 0.5f,
+        )
+
+        assertPreviewVariant(
+            preview.variants[1],
+            expectedName = "large font",
+            fontScale = 1.5f,
+        )
+    }
+
+    @Test
+    fun `generates metadata for nested Preview meta annotations`() {
+        val metadata = generateMetadata(
+            fileName = "Screens.kt",
+            source = """
+            package com.dfcruz.testapp
+
+            import androidx.compose.ui.tooling.preview.Preview
+            import com.dfcruz.compose.gallery.annotations.Gallery
+
+            @Preview(
+                name = "phone",
+                widthDp = 360
+            )
+            annotation class PhonePreview
+
+            @PhonePreview
+            annotation class AppPreview
+
+            @Gallery(name = "Home", group = "screens")
+            @AppPreview
+            fun HomePreview() {}
+        """
+        )
+
+        assertEquals(1, metadata.previews.size)
+
+        val preview = metadata.previews.single()
+
+        assertEquals(1, preview.variants.size)
+
+        assertPreviewVariant(
+            preview.variants.single(),
+            expectedName = "phone",
+            widthDp = 360,
+        )
+    }
+
+    @Test
+    fun `collects previews from multiple nested annotations`() {
+        val metadata = generateMetadata(
+            fileName = "Screens.kt",
+            source = """
+            package com.dfcruz.testapp
+
+            import androidx.compose.ui.tooling.preview.Preview
+            import com.dfcruz.compose.gallery.annotations.Gallery
+
+            @Preview(name = "phone")
+            annotation class PhonePreview
+
+            @Preview(name = "tablet")
+            annotation class TabletPreview
+
+            @PhonePreview
+            @TabletPreview
+            annotation class DevicePreviews
+
+            @Gallery(name = "Home", group = "screens")
+            @DevicePreviews
+            fun HomePreview() {}
+        """
+        )
+
+        val variants = metadata.previews.single().variants
+
+        assertEquals(2, variants.size)
+
+        assertEquals(
+            setOf("phone", "tablet"),
+            variants.map { it.name }.toSet()
+        )
+    }
+
+    @Test
+    fun `ignores cyclic meta annotations`() {
+        val metadata = generateMetadata(
+            fileName = "Screens.kt",
+            source = """
+            package com.dfcruz.testapp
+
+            import androidx.compose.ui.tooling.preview.Preview
+            import com.dfcruz.compose.gallery.annotations.Gallery
+
+            @LoopB
+            annotation class LoopA
+
+            @LoopA
+            annotation class LoopB
+
+            @Gallery(name = "Home", group = "screens")
+            @LoopA
+            fun HomePreview() {}
+        """
+        )
+
+        assertTrue(metadata.previews.isEmpty())
+    }
+
+    @Test
+    fun `deduplicates repeated Preview variants`() {
+        val metadata = generateMetadata(
+            fileName = "Screens.kt",
+            source = """
+            package com.dfcruz.testapp
+
+            import androidx.compose.ui.tooling.preview.Preview
+            import com.dfcruz.compose.gallery.annotations.Gallery
+
+            @Preview(name = "phone")
+            annotation class PhonePreview
+
+            @Gallery(name = "Home", group = "screens")
+            @Preview(name = "phone")
+            @PhonePreview
+            fun HomePreview() {}
+        """
+        )
+
+        assertEquals(
+            1,
+            metadata.previews.single().variants.size
+        )
+    }
+
     @Test
     fun `ignores Preview functions without Gallery`() {
         val metadata = generateMetadata(
@@ -119,7 +290,7 @@ class GalleryProcessorTest {
     }
 
     @Test
-    fun `creates empty variants when Gallery has no Preview`() {
+    fun `does not create previews when Gallery has no Preview`() {
         val metadata = generateMetadata(
             fileName = "Plain.kt",
             source = """
@@ -132,8 +303,7 @@ class GalleryProcessorTest {
             """
         )
 
-        assertEquals(1, metadata.previews.size)
-        assertTrue(metadata.previews.single().variants.isEmpty())
+        assertEquals(0, metadata.previews.size)
     }
 
     @Test
@@ -193,13 +363,17 @@ class GalleryProcessorTest {
 
     private fun assertGalleryPreview(
         preview: GalleryPreview,
-        expectedVariants: Int,
+        expectedName: String = "Home",
+        expectedGroup: String = "screens",
+        expectedTags: List<String> = listOf("ui", "smoke"),
+        expectedFileName: String = "HomeScreen.kt",
+        expectedVariants: Int = preview.variants.size,
     ) {
-        assertEquals("Home", preview.name)
-        assertEquals("screens", preview.group)
-        assertEquals(listOf("ui", "smoke"), preview.tags)
+        assertEquals(expectedName, preview.name)
+        assertEquals(expectedGroup, preview.group)
+        assertEquals(expectedTags, preview.tags)
         assertEquals("com.dfcruz.testapp", preview.packageName)
-        assertEquals("HomeScreen.kt", preview.fileName)
+        assertEquals(expectedFileName, preview.fileName)
         assertEquals(expectedVariants, preview.variants.size)
     }
 
@@ -208,6 +382,7 @@ class GalleryProcessorTest {
         expectedName: String,
         widthDp: Int = -1,
         heightDp: Int = -1,
+        fontScale: Float = 1f,
         showBackground: Boolean = false,
     ) {
         assertEquals(expectedName, variant.name)
@@ -216,7 +391,7 @@ class GalleryProcessorTest {
         assertEquals(widthDp, variant.widthDp)
         assertEquals(heightDp, variant.heightDp)
         assertEquals("", variant.locale)
-        assertEquals(1f, variant.fontScale)
+        assertEquals(fontScale, variant.fontScale)
         assertEquals(false, variant.showSystemUi)
         assertEquals(showBackground, variant.showBackground)
         assertEquals(0L, variant.backgroundColor)

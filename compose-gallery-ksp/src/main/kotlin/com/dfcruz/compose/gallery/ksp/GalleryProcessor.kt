@@ -3,6 +3,7 @@ package com.dfcruz.compose.gallery.ksp
 import com.dfcruz.compose.gallery.protocol.GalleryMetadata
 import com.dfcruz.compose.gallery.protocol.GalleryPreview
 import com.dfcruz.compose.gallery.protocol.PreviewVariant
+import com.google.devtools.ksp.getClassDeclarationByName
 import com.google.devtools.ksp.processing.CodeGenerator
 import com.google.devtools.ksp.processing.Dependencies
 import com.google.devtools.ksp.processing.KSPLogger
@@ -41,42 +42,88 @@ class GalleryProcessor(
         return emptyList()
     }
 
-    private fun collectGalleryPreviews(resolver: Resolver): List<GalleryPreview> {
-        return collectDirectPreviewVariants(resolver)
-    }
+    private fun collectGalleryPreviews(resolver: Resolver): List<GalleryPreview> =
+        resolver
+            .getSymbolsWithAnnotation(GALLERY, true)
+            .filterIsInstance<KSFunctionDeclaration>()
+            .mapNotNull { fn ->
+                val variants = fn.resolvePreviewVariants(resolver)
+                if (variants.isEmpty()) return@mapNotNull null
+                buildGalleryPreview(fn, variants)
+            }
+            .toList()
+
+    private fun KSFunctionDeclaration.resolvePreviewVariants(resolver: Resolver): List<PreviewVariant> =
+        buildList {
+            addAll(resolveDirectPreviewVariants())
+            addAll(resolveMetaPreviewVariants(resolver))
+        }.distinct()
 
     /**
      * Collects preview variants from functions annotated with `@Gallery` that
      * declare `@Preview` annotations directly.
      */
-    private fun collectDirectPreviewVariants(resolver: Resolver): List<GalleryPreview> =
-        resolver
-            .getSymbolsWithAnnotation(GALLERY, true)
-            .filterIsInstance<KSFunctionDeclaration>()
-            .map(::buildGalleryPreview)
+    private fun KSFunctionDeclaration.resolveDirectPreviewVariants(): List<PreviewVariant> =
+        this.annotations
+            .filter { it.getQualifiedName() == PREVIEW }
+            .map { it.toPreviewVariant(this) }
             .toList()
 
+    /**
+     * Collects preview variants declared through custom annotations applied to a
+     * `@Gallery` function.
+     */
+    private fun KSFunctionDeclaration.resolveMetaPreviewVariants(
+        resolver: Resolver,
+    ): List<PreviewVariant> = annotations
+        .flatMap { resolver.resolvePreviewVariantsRecursive(it, this) }
+        .toList()
 
-    private fun buildGalleryPreview(fn: KSFunctionDeclaration): GalleryPreview {
-        val annotations = fn.annotations.toList()
-        val gallery =
-            annotations.findQualifiedAnnotation(GALLERY) ?: error("@Gallery annotation expected")
+    private fun Resolver.resolvePreviewVariantsRecursive(
+        annotation: KSAnnotation,
+        function: KSFunctionDeclaration,
+        visited: MutableSet<String> = mutableSetOf(),
+    ): Sequence<PreviewVariant> {
+        val qualifiedName = annotation.getQualifiedName() ?: return emptySequence<PreviewVariant>()
 
-        val variants = annotations
-            .resolvePreviewAnnotations()
-            .map { it.toPreviewVariant(fn) }
+        return when (qualifiedName) {
+            GALLERY -> emptySequence()
+
+            PREVIEW -> sequenceOf(annotation.toPreviewVariant(function))
+
+            else -> {
+                // Prevent cycles such as @A -> @B -> @A.
+                // Only track custom annotations. Multiple @Preview annotations are valid and
+                // should all be collected, but custom annotation cycles must be broken.
+                if (!visited.add(qualifiedName)) return emptySequence()
+
+                getClassDeclarationByName(qualifiedName)
+                    ?.annotations
+                    ?.flatMap { resolvePreviewVariantsRecursive(it, function, visited) }
+                    .orEmpty()
+            }
+        }
+    }
+
+    private fun buildGalleryPreview(
+        function: KSFunctionDeclaration,
+        variants: List<PreviewVariant>
+    ): GalleryPreview {
+        val gallery = requireNotNull(
+            function.annotations.findQualifiedAnnotation(GALLERY)
+        ) { "@Gallery annotation expected" }
 
         return GalleryPreview(
-            id = stableId(fn),
+            id = stableId(function),
             name = gallery.getString("name") ?: "",
             group = gallery.getString("group") ?: "",
             tags = (gallery.getArgument("tags") as? List<*>)
                 ?.filterIsInstance<String>()
                 .orEmpty(),
-            simpleName = fn.simpleName.asString(),
-            qualifiedName = fn.qualifiedName?.asString().orEmpty(),
-            packageName = fn.packageName.asString(),
-            fileName = fn.containingFile?.fileName.orEmpty(),
+            simpleName = function.simpleName.asString(),
+            qualifiedName = function.qualifiedName?.asString().orEmpty(),
+            packageName = function.packageName.asString(),
+            fileName = function.containingFile?.fileName.orEmpty(),
             variants = variants,
         )
     }
@@ -178,12 +225,9 @@ class GalleryProcessor(
     private fun KSAnnotation.getLong(name: String): Long? = getArgument(name) as? Long
     private fun KSAnnotation.getBoolean(name: String): Boolean? = getArgument(name) as? Boolean
 
-    private fun Iterable<KSAnnotation>.findQualifiedAnnotation(
+    private fun Sequence<KSAnnotation>.findQualifiedAnnotation(
         qualifiedName: String
     ): KSAnnotation? = firstOrNull { it.getQualifiedName() == qualifiedName }
-
-    private fun List<KSAnnotation>.resolvePreviewAnnotations(): List<KSAnnotation> =
-        this.filter { it.getQualifiedName() == PREVIEW }
 
     private companion object {
         const val GALLERY = "com.dfcruz.compose.gallery.annotations.Gallery"
