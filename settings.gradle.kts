@@ -22,6 +22,8 @@ dependencyResolutionManagement {
     }
 }
 
+includeBuild("compose-gallery-gradle")
+
 rootProject.name = "compose-gallery"
 include(":sample")
 include(":compose-gallery-annotations")
