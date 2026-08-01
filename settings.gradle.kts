@@ -22,9 +22,11 @@ dependencyResolutionManagement {
     }
 }
 
-includeBuild("compose-gallery-gradle")
-
 rootProject.name = "compose-gallery"
+
+includeBuild("compose-gallery-gradle")
+includeBuild("compose-gallery-intellij")
+
 include(":sample")
 include(":compose-gallery-annotations")
 include(":compose-gallery-protocol")

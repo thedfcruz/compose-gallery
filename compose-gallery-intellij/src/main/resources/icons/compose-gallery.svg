@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+            d="M20 3
+           L34.722 11.5
+           V28.5
+           L20 37
+           L5.278 28.5
+           V11.5
+           L20 3Z"
+            fill="#6C5CE7"
+    />
+    <path
+            d="M20 8
+           L30.392 14
+           V26
+           L20 32
+           L9.608 26
+           V14
+           L20 8Z"
+            fill="#242424"
+    />
+    <path
+            d="M14 18
+           H26
+           V22
+           H14
+           V18Z"
+            fill="#42D3A5"
+    />
+</svg>
