@@ -51,17 +51,18 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val gradleRunner by lazy { GalleryGradleRunner(project) }
 
-    private val galleryDir = File(project.basePath, "build/gallery-aggregated")
-    private val previewsDir
-        get() = File(galleryDir, "previews")
+    private val galleryDir = File(project.basePath, "build/gallery")
     private val manifestFile
         get() = File(galleryDir, "gallery.json")
 
     private data class PreviewEntry(
-        val file: File,
+        val file: File?,
         val name: String,
         val group: String?,
         val methodFqn: String?,
+        val module: String,
+        val status: String,
+        val error: String?,
     )
 
     private val imageContainer = JPanel().apply {
@@ -99,6 +100,11 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
         preferredSize = Dimension(28, 28)
     }
 
+    private val moduleDropdown = ComboBox(arrayOf("All")).apply {
+        preferredSize = Dimension(140, 28)
+        toolTipText = "Filter by module"
+    }
+
     private val groupDropdown = ComboBox(arrayOf("All")).apply {
         preferredSize = Dimension(140, 28)
         toolTipText = "Filter by group"
@@ -134,8 +140,23 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
 
         val searchRow = JPanel(BorderLayout(4, 0)).apply {
             border = JBUI.Borders.empty(4, 8, 2, 8)
-            add(groupDropdown, BorderLayout.WEST)
+            add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+                    add(moduleDropdown)
+                    add(groupDropdown)
+                },
+                BorderLayout.WEST
+            )
             add(searchField, BorderLayout.CENTER)
+            val rowHeight = maxOf(
+                moduleDropdown.preferredSize.height,
+                groupDropdown.preferredSize.height,
+                searchField.preferredSize.height
+            )
+
+            listOf(moduleDropdown, groupDropdown, searchField).forEach {
+                it.preferredSize = Dimension(it.preferredSize.width, rowHeight)
+            }
         }
 
         val statusRow = JPanel(BorderLayout()).apply {
@@ -203,6 +224,7 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = rebuildImageCards()
         })
 
+        moduleDropdown.addActionListener { rebuildImageCards() }
         groupDropdown.addActionListener { rebuildImageCards() }
 
         addComponentListener(object : java.awt.event.ComponentAdapter() {
@@ -219,29 +241,26 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
         allEntries.clear()
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val fqnByName = parseManifest(manifestFile)
-            val pngFiles = previewsDir
-                .takeIf { it.exists() }
-                ?.walkTopDown()
-                ?.filter { it.isFile && it.extension == "png" }
-                ?.toList()
-                ?: emptyList()
-
-            val entries = pngFiles.map { file ->
-                PreviewEntry(
-                    file = file,
-                    name = file.nameWithoutExtension,
-                    group = file.parentFile
-                        .takeIf { it.absolutePath != previewsDir.absolutePath }
-                        ?.name,
-                    methodFqn = fqnByName[file.nameWithoutExtension],
-                )
-            }
+            val entries = parseManifest(manifestFile)
 
             SwingUtilities.invokeLater {
                 allEntries.addAll(entries)
 
-                val groups = allEntries.mapNotNull { it.group }.distinct().sorted()
+                val groups = allEntries
+                    .mapNotNull { it.group }
+                    .distinct()
+                    .sorted()
+
+                val modules = allEntries
+                    .map { it.module }
+                    .distinct()
+                    .sorted()
+
+
+                moduleDropdown.removeAllItems()
+                moduleDropdown.addItem("All")
+                modules.forEach { moduleDropdown.addItem(it) }
+
                 groupDropdown.removeAllItems()
                 groupDropdown.addItem("All")
                 groups.forEach { groupDropdown.addItem(it) }
@@ -257,30 +276,85 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
         }
     }
 
-    private fun parseManifest(file: File): Map<String, String> {
-        if (!file.isFile) return emptyMap()
+    private fun parseManifest(file: File): List<PreviewEntry> {
+        if (!file.isFile) return emptyList()
+
         return runCatching {
             val root = Json.parseToJsonElement(file.readText()).jsonObject
-            val showrooms = root["showrooms"] as? JsonArray ?: return emptyMap()
-            buildMap {
-                showrooms.forEach { showroomEl ->
-                    val showroom = showroomEl.jsonObject
-                    val previews = showroom["previews"] as? JsonArray ?: return@forEach
-                    previews.forEach { pvEl ->
-                        val pv = pvEl.jsonObject
-                        val name = (pv["name"] as? JsonPrimitive)
-                            ?.content?.takeIf { it.isNotBlank() } ?: return@forEach
-                        val fqn = (pv["previewMethodFqn"] as? JsonPrimitive)
-                            ?.content?.takeIf { it.isNotBlank() } ?: return@forEach
-                        put(name, fqn)
+            val modules = root["modules"] as? JsonArray ?: return emptyList()
+
+            buildList {
+                modules.forEach { moduleElement ->
+                    val moduleObject = moduleElement.jsonObject
+
+                    val module = (moduleObject["module"] as? JsonPrimitive)
+                        ?.content
+                        ?.takeIf { it.isNotBlank() }
+                        ?: return@forEach
+
+                    val previews = moduleObject["previews"] as? JsonArray
+                        ?: return@forEach
+
+                    previews.forEach { previewElement ->
+                        val preview = previewElement.jsonObject
+
+                        val name = (preview["name"] as? JsonPrimitive)
+                            ?.content
+                            ?.takeIf { it.isNotBlank() }
+                            ?: return@forEach
+
+                        val group = (preview["group"] as? JsonPrimitive)
+                            ?.content
+                            ?.takeIf { it.isNotBlank() }
+
+                        val methodFqn = (preview["previewMethodFqn"] as? JsonPrimitive)
+                            ?.content
+                            ?.takeIf { it.isNotBlank() }
+
+                        val variants = preview["variants"] as? JsonArray
+                            ?: return@forEach
+
+                        variants.forEach { variantElement ->
+                            val variant = variantElement.jsonObject
+
+                            val variantName = (variant["name"] as? JsonPrimitive)
+                                ?.content
+                                ?.takeIf { it.isNotBlank() }
+                                ?: name
+
+                            val status = (variant["status"] as? JsonPrimitive)
+                                ?.content
+                                ?: "FAILED"
+
+                            val image = (variant["image"] as? JsonPrimitive)
+                                ?.content
+                                ?.takeIf { it.isNotBlank() }
+
+                            val error = (variant["error"] as? JsonPrimitive)
+                                ?.content
+                                ?.takeIf { it.isNotBlank() }
+
+                            add(
+                                PreviewEntry(
+                                    file = image?.let { File(galleryDir, it) },
+                                    name = variantName,
+                                    group = group,
+                                    methodFqn = methodFqn,
+                                    module = module,
+                                    status = status,
+                                    error = error,
+                                )
+                            )
+                        }
                     }
                 }
             }
-        }.getOrDefault(emptyMap())
+        }.getOrDefault(emptyList())
     }
 
     private fun rebuildImageCards() {
         val query = searchField.text.trim().lowercase()
+        val selectedModule = moduleDropdown.selectedItem as? String
         val selectedGroup = groupDropdown.selectedItem as? String
 
         imageContainer.removeAll()
@@ -288,31 +362,69 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
         val filtered = allEntries.filter { entry ->
             (query.isEmpty() ||
                     entry.name.lowercase().contains(query) ||
-                    entry.group?.lowercase()?.contains(query) == true) &&
-                    (selectedGroup == null || selectedGroup == "All" || entry.group == selectedGroup)
+                    entry.group?.lowercase()?.contains(query) == true ||
+                    entry.module.lowercase().contains(query)) &&
+                    (selectedModule == null ||
+                            selectedModule == "All" ||
+                            entry.module == selectedModule) &&
+                    (selectedGroup == null ||
+                            selectedGroup == "All" ||
+                            entry.group == selectedGroup)
         }
 
-        val ungrouped = filtered.filter { it.group == null }
-        val grouped = filtered.filter { it.group != null }.groupBy { it.group!! }
+        val byModule = filtered.groupBy { it.module }
 
-        ungrouped.forEach { entry ->
-            imageContainer.add(buildCard(entry))
-            imageContainer.add(Box.createRigidArea(Dimension(0, 16)))
-        }
+        byModule
+            .toSortedMap()
+            .forEach { (module, entries) ->
+                imageContainer.add(buildModuleHeader(module, entries))
+                imageContainer.add(Box.createRigidArea(Dimension(0, 8)))
 
-        grouped.forEach { (group, entries) ->
-            imageContainer.add(buildGroupHeader(group, entries))
-            imageContainer.add(Box.createRigidArea(Dimension(0, 8)))
-            if (group !in collapsedGroups) {
-                entries.forEach { entry ->
-                    imageContainer.add(buildCard(entry))
-                    imageContainer.add(Box.createRigidArea(Dimension(0, 16)))
-                }
+                val byGroup = entries.groupBy { it.group }
+
+                byGroup
+                    .toSortedMap(compareBy(nullsFirst()) { it })
+                    .forEach { (group, groupEntries) ->
+                        if (group != null) {
+                            imageContainer.add(
+                                buildGroupHeader(group, groupEntries)
+                            )
+                            imageContainer.add(
+                                Box.createRigidArea(Dimension(0, 8))
+                            )
+                        }
+
+                        if (group == null || group !in collapsedGroups) {
+                            groupEntries.forEach { entry ->
+                                imageContainer.add(buildCard(entry))
+                                imageContainer.add(
+                                    Box.createRigidArea(Dimension(0, 16))
+                                )
+                            }
+                        }
+                    }
             }
-        }
 
         imageContainer.revalidate()
         imageContainer.repaint()
+    }
+
+    private fun buildModuleHeader(
+        module: String,
+        entries: List<PreviewEntry>,
+    ): JPanel {
+        return JPanel(BorderLayout()).apply {
+            background = UIManager.getColor("Tree.rowBackground")
+            border = JBUI.Borders.empty(8, 12)
+            maximumSize = Dimension(Int.MAX_VALUE, 40)
+            alignmentX = LEFT_ALIGNMENT
+
+            val label = JLabel("$module  (${entries.size})").apply {
+                font = font.deriveFont(Font.BOLD, 14f)
+            }
+
+            add(label, BorderLayout.WEST)
+        }
     }
 
     private fun buildGroupHeader(group: String, entries: List<PreviewEntry>): JPanel {
@@ -342,14 +454,17 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun buildCard(entry: PreviewEntry): JPanel {
-        val img = runCatching { ImageIO.read(entry.file) }.getOrNull()
 
-        val availableWidth = this.width.takeIf { it > 0 } ?: 400
-        val targetWidth = ((availableWidth - 48) * zoomFactor).toInt()
+        val image = runCatching { ImageIO.read(entry.file) }.getOrNull()
 
-        val scaledImg = img?.getScaledInstance(targetWidth, -1, Image.SCALE_SMOOTH)
+        val scaledImg = image?.let {
+            val width = (it.width * zoomFactor).toInt()
+            val height = (it.height * zoomFactor).toInt()
+
+            it.getScaledInstance(width, height, Image.SCALE_SMOOTH)
+        }
+
         val icon = scaledImg?.let { ImageIcon(it) }
-        val iconH = icon?.iconHeight ?: targetWidth
 
         val nameLabel = JLabel(entry.name).apply {
             font = font.deriveFont(Font.PLAIN, 11f)
@@ -396,7 +511,6 @@ class GalleryPanel(private val project: Project) : JPanel(BorderLayout()) {
             background = UIManager.getColor("Panel.background")
             border = JBUI.Borders.empty(0, 12)
             alignmentX = LEFT_ALIGNMENT
-            maximumSize = Dimension(Int.MAX_VALUE, iconH + 40)
             add(headerRow)
             add(imageLabel)
         }

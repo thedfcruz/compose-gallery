@@ -63,11 +63,11 @@ class GalleryProcessor(
      * Collects preview variants from functions annotated with `@Gallery` that
      * declare `@Preview` annotations directly.
      */
-    private fun KSFunctionDeclaration.resolveDirectPreviewVariants(): List<PreviewVariant> =
+    private fun KSFunctionDeclaration.resolveDirectPreviewVariants(): Set<PreviewVariant> =
         this.annotations
             .filter { it.getQualifiedName() == PREVIEW }
-            .map { it.toPreviewVariant(this) }
-            .toList()
+            .map { it.toPreviewVariant() }
+            .toSet()
 
     /**
      * Collects preview variants declared through custom annotations applied to a
@@ -89,7 +89,7 @@ class GalleryProcessor(
         return when (qualifiedName) {
             GALLERY -> emptySequence()
 
-            PREVIEW -> sequenceOf(annotation.toPreviewVariant(function))
+            PREVIEW -> sequenceOf(annotation.toPreviewVariant())
 
             else -> {
                 // Prevent cycles such as @A -> @B -> @A.
@@ -124,6 +124,7 @@ class GalleryProcessor(
             qualifiedName = function.qualifiedName?.asString().orEmpty(),
             packageName = function.packageName.asString(),
             fileName = function.containingFile?.fileName.orEmpty(),
+            previewMethodQualifiedName = jvmMethodFqn(function),
             variants = variants,
         )
     }
@@ -146,9 +147,8 @@ class GalleryProcessor(
         }
     }
 
-    private fun KSAnnotation.toPreviewVariant(fn: KSFunctionDeclaration): PreviewVariant =
+    private fun KSAnnotation.toPreviewVariant(): PreviewVariant =
         PreviewVariant(
-            previewMethodQualifiedName = jvmMethodFqn(fn),
             name = getString("name") ?: "",
             group = getString("group") ?: "",
             apiLevel = getInt("apiLevel") ?: -1,

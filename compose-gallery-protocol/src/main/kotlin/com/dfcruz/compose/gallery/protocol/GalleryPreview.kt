@@ -12,5 +12,6 @@ data class GalleryPreview(
     val qualifiedName: String,
     val packageName: String,
     val fileName: String,
+    val previewMethodQualifiedName: String,
     val variants: List<PreviewVariant>
 )

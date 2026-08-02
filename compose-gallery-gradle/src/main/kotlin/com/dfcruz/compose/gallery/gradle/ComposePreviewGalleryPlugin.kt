@@ -3,7 +3,6 @@ package com.dfcruz.compose.gallery.gradle
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
-import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 import org.gradle.api.attributes.Attribute
 import org.gradle.api.file.Directory
 import org.gradle.api.file.RegularFile
@@ -23,12 +22,19 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
         }
     }
 
-    private fun wire(project: Project, layoutlib: LayoutlibSetup, androidVariant: String) {
+    private fun wire(
+        project: Project,
+        layoutlib: LayoutlibSetup,
+        androidVariant: String,
+    ) {
         with(project) {
             val galleryDir = layout.buildDirectory.dir("gallery")
             val previewsDir = galleryDir.map { it.dir("previews") }
+
             val kspManifestFile =
-                layout.buildDirectory.file("generated/ksp/$androidVariant/resources/gallery-metadata.json")
+                layout.buildDirectory.file(
+                    "generated/ksp/$androidVariant/resources/gallery-metadata.json"
+                )
 
             val render = registerLayoutlibRender(
                 project = this,
@@ -39,46 +45,57 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
                 previewsDir = previewsDir,
             )
 
-            // Publish this module's gallery dir as a consumable artifact
-            configurations.create("galleryPreviews").apply {
-                isCanBeConsumed = true
-                isCanBeResolved = false
-                attributes.attribute(GALLERY_ATTRIBUTE, "gallery-previews")
-                outgoing.artifact(galleryDir) { builtBy(render) }
-            }
-
-            // Aggregate — only wire on the application module (not libraries)
-            val isAppModule = project.plugins.hasPlugin("com.android.application")
-            val runtimeClasspath = configurations.findByName("${androidVariant}RuntimeClasspath")
-            val aggregateTask = if (isAppModule && runtimeClasspath != null) {
-                val depGalleryDirs = runtimeClasspath.incoming.artifactView {
-                    withVariantReselection()
-                    lenient(true)
-                    componentFilter { it is ProjectComponentIdentifier }
-                    attributes.attribute(GALLERY_ATTRIBUTE, "gallery-previews")
-                }.files
-
-                val aggregatedDir = layout.buildDirectory.dir("gallery-aggregated")
-
-                tasks.register("aggregateGallery", AggregateGalleryTask::class.java) {
-                    dependencyGalleryDirs.from(depGalleryDirs) // Add modules output
-                    dependencyGalleryDirs.from(galleryDir) // add :app output
-                    outputDir.set(aggregatedDir)
-                    dependsOn(render)
-                }
-            } else {
-                null
-            }
-
-            val galleryProducer = aggregateTask ?: render
+            registerWithRootAggregator(
+                project = this,
+                galleryDir = galleryDir,
+                renderTask = render,
+            )
 
             tasks.register("generateGallery") {
                 group = "gallery"
-                description = "Renders every @Preview component into build/gallery/previews."
-                dependsOn(galleryProducer)
+                description = "Renders every @Preview component in this module."
+                dependsOn(render)
             }
         }
     }
+
+    private fun registerWithRootAggregator(
+        project: Project,
+        galleryDir: Provider<Directory>,
+        renderTask: TaskProvider<LayoutlibRenderTask>,
+    ) {
+        val root = project.rootProject
+
+        val aggregateTask = root.tasks.findByName("aggregateGallery")
+            ?.let {
+                root.tasks.named(
+                    "aggregateGallery",
+                    AggregateGalleryTask::class.java,
+                )
+            }
+            ?: root.tasks.register(
+                "aggregateGallery",
+                AggregateGalleryTask::class.java,
+            ) {
+                outputDir.set(
+                    root.layout.buildDirectory.dir("gallery")
+                )
+            }
+
+        aggregateTask.configure {
+            dependencyGalleryDirs.from(galleryDir)
+            dependsOn(renderTask)
+        }
+
+        if (root.tasks.findByName("generateGallery") == null) {
+            root.tasks.register("generateGallery") {
+                group = "gallery"
+                description = "Renders and aggregates all Compose previews."
+                dependsOn(aggregateTask)
+            }
+        }
+    }
+
 
     /** The Android variant to extract: an explicit `gallery { variant }`, else the first `…DebugKotlin` KSP task's
      *  variant (so flavored projects work unconfigured), else `"debug"`. */
@@ -164,6 +181,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
                     layoutlibDir.set(setup.prepare.flatMap { it.layoutlibDir })
                     namespace.set(androidNamespace())
                     apiLevel.set(LAYOUTLIB_API)
+                    module.set(project.path)
                     workDir.set(scratchDir)
                     this.previewsDir.set(previewsDir)
 

@@ -4,7 +4,6 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class PreviewVariant(
-    val previewMethodQualifiedName: String? = null,
     val name: String = "",
     val group: String = "",
     val apiLevel: Int? = null,

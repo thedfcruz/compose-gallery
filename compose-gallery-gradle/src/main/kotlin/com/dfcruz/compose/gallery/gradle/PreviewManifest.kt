@@ -16,11 +16,11 @@ data class GalleryPreviewDetails(
     val qualifiedName: String,
     val packageName: String,
     val fileName: String,
+    val previewMethodQualifiedName: String,
     val variants: List<PreviewVariantDetails>,
 )
 
 data class PreviewVariantDetails(
-    val previewMethodQualifiedName: String? = null,
     val name: String = "",
     val group: String = "",
     val apiLevel: Int? = null,
@@ -51,11 +51,10 @@ internal fun parsePreviewConfiguration(text: String): GalleryPreviews {
             qualifiedName = preview.str("qualifiedName") ?: "",
             packageName = preview.str("packageName") ?: "",
             fileName = preview.str("fileName") ?: "",
+            previewMethodQualifiedName = preview.str("previewMethodQualifiedName") ?: "",
             variants = preview.arr("variants").map { variantElement ->
                 val variant = variantElement.jsonObject
-
                 PreviewVariantDetails(
-                    previewMethodQualifiedName = variant.str("previewMethodQualifiedName"),
                     name = variant.str("name") ?: "",
                     group = variant.str("group") ?: "",
                     apiLevel = variant.int("apiLevel"),

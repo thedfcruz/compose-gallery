@@ -367,6 +367,7 @@ class GalleryProcessorTest {
         expectedGroup: String = "screens",
         expectedTags: List<String> = listOf("ui", "smoke"),
         expectedFileName: String = "HomeScreen.kt",
+        previewMethodQualifiedName: String = "com.dfcruz.testapp.HomeScreenKt.HomeScreenPreview",
         expectedVariants: Int = preview.variants.size,
     ) {
         assertEquals(expectedName, preview.name)
@@ -374,6 +375,7 @@ class GalleryProcessorTest {
         assertEquals(expectedTags, preview.tags)
         assertEquals("com.dfcruz.testapp", preview.packageName)
         assertEquals(expectedFileName, preview.fileName)
+        assertEquals(previewMethodQualifiedName, preview.previewMethodQualifiedName)
         assertEquals(expectedVariants, preview.variants.size)
     }
 

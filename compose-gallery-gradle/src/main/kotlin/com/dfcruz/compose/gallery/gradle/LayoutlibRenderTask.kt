@@ -73,6 +73,9 @@ abstract class LayoutlibRenderTask : DefaultTask() {
     @get:Input
     abstract val apiLevel: Property<String>
 
+    @get:Input
+    abstract val module: Property<String>
+
     /** Scratch dir for the generated JSON + raw PNGs + results.json (not the consumed thumbnails). */
     @get:Internal
     abstract val workDir: DirectoryProperty
@@ -80,19 +83,21 @@ abstract class LayoutlibRenderTask : DefaultTask() {
     @get:OutputDirectory
     abstract val previewsDir: DirectoryProperty
 
+    private val json by lazy { Json { prettyPrint = true } }
+
     private data class PreviewShot(
         val group: String?,
         val name: String,
         val methodFqn: String,
         val id: String,
-        //val params: List<HPreviewParam>,
         val locale: String?,
         val widthDp: Int?,
         val heightDp: Int?,
         val device: String?,
+        val preview: GalleryPreviewDetails,
+        val variant: PreviewVariantDetails,
+        val variantIndex: Int,
     )
-
-    //internal data class HPreviewParam(val name: String = "", val provider: String = "")
 
     @TaskAction
     fun render() {
@@ -107,7 +112,11 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         // linger after a renderer rename/move.
         thumbs.listFiles()?.forEach { if (it.name.endsWith(".png")) it.delete() }
 
-        val shots = buildPreviewShots()
+
+        val manifestFile = kspManifest.orNull?.asFile?.takeIf { it.isFile } ?: return
+        val previewConfiguration = parsePreviewConfiguration(manifestFile.readText())
+
+        val shots = buildPreviewShots(previewConfiguration)
         // Shots should be the list of Previews to render
         if (shots.isEmpty()) {
             logger.lifecycle("gallery: no @GalleryPreview to render (layoutlib).")
@@ -149,20 +158,6 @@ abstract class LayoutlibRenderTask : DefaultTask() {
                 shots.forEach { s ->
                     addJsonObject {
                         put("methodFQN", s.methodFqn)
-                        /*
-                        // @PreviewParameter args: the renderer instantiates the composable's sample value from each provider.
-                        // limit=1 ⇒ render just the first value (one thumbnail, not one per provider element).
-                        putJsonArray("methodParams") {
-                            s.params.forEach { p ->
-                                addJsonObject {
-                                    put("provider", p.provider)
-                                    put("name", p.name)
-                                    put("limit", "1")
-                                }
-                            }
-                        }
-
-                         */
                         // A default phone device so EVERY preview has a bounded canvas. Without it, a plain `@Preview` (no
                         // device) on an unsized lazy layout (LazyColumn/Grid) measures to 0 → a 1×1 blank thumbnail; a
                         // `@DevicePreviews`-annotated preview already carries its own device and renders fine either way.
@@ -248,44 +243,76 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         }
 
         val byId = readLayoutlibResults(resultsFile)
+
+        val renderedVariants = mutableMapOf<String, GalleryModuleVariant>()
         var ok = 0
         var failed = 0
+
         shots.forEach { s ->
             val res = byId[s.id]
             val img = res?.imagePath?.let { pngDir.resolve(it) }
             val success = isLayoutlibSuccess(res, img)
+
+            val previewName = sanitizeFileName(s.preview.name)
+            val variantName = sanitizeFileName(s.name)
+            val fileName = "$variantName-${s.variantIndex}.png"
+
+            val imagePath = if (s.group.isNullOrEmpty()) {
+                "previews/$previewName/$fileName"
+            } else {
+                "previews/${sanitizeFileName(s.group)}/$previewName/$fileName"
+            }
+
             if (success && img != null) {
-                val dest = if (s.group.isNullOrEmpty()) {
-                    "${s.name}.png"
-                } else {
-                    "${s.group}/${s.name}.png"
-                }
-                img.copyTo(thumbs.resolve(dest), overwrite = true)
+                img.copyTo(
+                    thumbs.resolve(imagePath.removePrefix("previews/")),
+                    overwrite = true,
+                )
+
+                renderedVariants[s.id] = GalleryModuleVariant(
+                    name = s.name,
+                    status = GalleryRenderStatus.SUCCESS,
+                    image = imagePath,
+                )
+
                 ok++
             } else {
-                failed++
-                val why = when {
-                    res == null -> "no result"
+                val error = when {
+                    res == null -> "No render result"
 
                     res.brokenClasses.isNotEmpty() ->
-                        "missing classes on the render classpath — ${res.brokenClasses.joinToString()}"
+                        "Missing classes on the render classpath — ${res.brokenClasses.joinToString()}"
 
                     res.missingClasses.any { it.endsWith("ComposeViewAdapter") } ->
-                        "the preview host '$COMPOSE_VIEW_ADAPTER' is-- missing from the render classpath"
+                        "The preview host '$COMPOSE_VIEW_ADAPTER' is missing from the render classpath"
 
                     res.missingClasses.isNotEmpty() ->
-                        "missing classes on the render classpath — ${res.missingClasses.joinToString()}"
+                        "Missing classes on the render classpath — ${res.missingClasses.joinToString()}"
 
+                    res.problems.isNotEmpty() ->
+                        "Render problem — ${res.problems.first()}"
 
-                    res.problems.isNotEmpty() -> "render problem — ${res.problems.first()}"
+                    res.message != null ->
+                        res.message
 
-                    res.message != null -> res.message
+                    res.status != null && res.status != "SUCCESS" ->
+                        res.status
 
-                    res.status != null && res.status != "SUCCESS" -> res.status
-
-                    else -> "no image produced"
+                    else ->
+                        "No image produced"
                 }
-                logger.warn("gallery: layoutlib render failed for '${s.name}' (${s.methodFqn}): $why")
+
+                renderedVariants[s.id] = GalleryModuleVariant(
+                    name = s.name,
+                    status = GalleryRenderStatus.FAILED,
+                    error = error,
+                )
+
+                failed++
+
+                logger.warn(
+                    "gallery: layoutlib render failed for '${s.name}' (${s.methodFqn}): $error"
+                )
             }
         }
 
@@ -301,14 +328,56 @@ abstract class LayoutlibRenderTask : DefaultTask() {
             )
         }
 
-        // Copy KSP manifest into gallery dir so aggregator finds it alongside the PNGs
-        val manifestDest = previewsDir.get().asFile.parentFile.resolve("gallery-module.json")
-        val manifestSource = kspManifest.orNull?.asFile
-        if (manifestSource != null && manifestSource.isFile) {
-            manifestSource.copyTo(manifestDest, overwrite = true)
-        } else {
-            manifestDest.writeText("""{"previews":[]}""")
-        }
+        val galleryModule = buildGalleryModule(
+            previews = previewConfiguration,
+            renderedVariants = renderedVariants,
+        )
+
+        val galleryModuleFile = previewsDir
+            .get()
+            .asFile
+            .parentFile
+            .resolve("gallery-module.json")
+
+        galleryModuleFile.writeText(
+            json.encodeToString(
+                GalleryModule.serializer(),
+                galleryModule,
+            )
+        )
+    }
+
+    private fun buildGalleryModule(
+        previews: GalleryPreviews,
+        renderedVariants: Map<String, GalleryModuleVariant>,
+    ): GalleryModule {
+        return GalleryModule(
+            module = module.get(),
+            previews = previews.previews.map { preview ->
+                GalleryModulePreview(
+                    id = preview.id,
+                    name = preview.name,
+                    group = preview.group,
+                    tags = preview.tags,
+                    simpleName = preview.simpleName,
+                    qualifiedName = preview.qualifiedName,
+                    packageName = preview.packageName,
+                    fileName = preview.fileName,
+                    variants = preview.variants.mapIndexed { index, variant ->
+                        val shotId = "${preview.id.ifBlank { preview.qualifiedName }}-$index"
+
+                        renderedVariants[shotId]
+                            ?: GalleryModuleVariant(
+                                name = variant.name.ifEmpty {
+                                    preview.name.ifEmpty { preview.simpleName }
+                                },
+                                status = GalleryRenderStatus.FAILED,
+                                error = "No render result",
+                            )
+                    },
+                )
+            },
+        )
     }
 
     private companion object {
@@ -398,39 +467,47 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         }.toMap()
     }
 
-    private fun buildPreviewShots(): List<PreviewShot> {
-        val manifestFile = kspManifest.orNull?.asFile?.takeIf { it.isFile } ?: return emptyList()
-        val previewConfiguration = parsePreviewConfiguration(manifestFile.readText())
-
-        return buildList {
-            var i = 0
-
+    private fun buildPreviewShots(previewConfiguration: GalleryPreviews): List<PreviewShot> =
+        buildList {
             previewConfiguration.previews.forEach { preview ->
-                preview.variants.forEach { variant ->
-                    val method = variant.previewMethodQualifiedName
+                val methodFqn = preview.previewMethodQualifiedName
+                if (methodFqn.isBlank()) {
+                    logger.warn(
+                        "gallery: @Gallery '${preview.name}' has no JVM methodFqn (regenerate KSP) — skipping."
+                    )
+                    return@forEach
+                }
 
-                    if (method.isNullOrBlank()) {
-                        logger.warn(
-                            "gallery: @Gallery '${preview.name}' has no JVM methodFqn (regenerate KSP) — skipping."
-                        )
-                    } else {
-                        add(
-                            PreviewShot(
-                                group = preview.group,
-                                name = (variant.name.ifEmpty { preview.name.ifEmpty { preview.simpleName } }) + i,
-                                methodFqn = method,
-                                id = preview.id.ifBlank { "prev${i++}" },
-                                locale = variant.locale.takeIf { it.isNotEmpty() },
-                                widthDp = variant.widthDp?.takeIf { it > 0f },
-                                heightDp = variant.heightDp?.takeIf { it > 0f },
-                                device = variant.device.takeIf { it.isNotEmpty() },
-                            )
-                        )
+                val previewId = preview.id.ifBlank { preview.qualifiedName }
+
+                preview.variants.forEachIndexed { index, variant ->
+                    val name = variant.name.ifEmpty {
+                        preview.name.ifEmpty { preview.simpleName }
                     }
+
+                    add(
+                        PreviewShot(
+                            group = preview.group,
+                            name = name,
+                            methodFqn = methodFqn,
+                            id = "$previewId-$index",
+                            locale = variant.locale.takeIf(String::isNotEmpty),
+                            widthDp = variant.widthDp?.takeIf { it > 0 },
+                            heightDp = variant.heightDp?.takeIf { it > 0 },
+                            device = variant.device.takeIf(String::isNotEmpty),
+                            preview = preview,
+                            variant = variant,
+                            variantIndex = index,
+                        )
+                    )
                 }
             }
         }
-    }
+
+    private fun sanitizeFileName(name: String): String =
+        name.trim()
+            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+            .replace(Regex("_+"), "_")
 }
 
 

@@ -61,7 +61,7 @@ class JvmMethodFqnTest {
                     }
                 }
             """,
-            expectedFqn = "com.dfcruz.testapp.Outer\$Inner.preview",
+            expectedFqn = $$"com.dfcruz.testapp.Outer$Inner.preview",
         ),
         Case(
             label = "function in a companion object",
@@ -79,7 +79,7 @@ class JvmMethodFqnTest {
                     }
                 }
             """,
-            expectedFqn = "com.dfcruz.testapp.HomeScreen\$Companion.preview",
+            expectedFqn = $$"com.dfcruz.testapp.HomeScreen$Companion.preview",
         ),
         Case(
             label = "top-level function with @file:JvmName override",
@@ -109,7 +109,7 @@ class JvmMethodFqnTest {
             assertEquals(
                 "[${case.label}] wrong previewMethodQualifiedName",
                 case.expectedFqn,
-                metadata.previews.first().variants.first().previewMethodQualifiedName,
+                metadata.previews.first().previewMethodQualifiedName,
             )
         }
     }
