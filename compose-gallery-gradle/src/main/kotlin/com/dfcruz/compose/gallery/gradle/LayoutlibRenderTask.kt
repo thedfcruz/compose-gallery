@@ -83,7 +83,12 @@ abstract class LayoutlibRenderTask : DefaultTask() {
     @get:OutputDirectory
     abstract val previewsDir: DirectoryProperty
 
-    private val json by lazy { Json { prettyPrint = true } }
+    private val json by lazy {
+        Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+        }
+    }
 
     private data class PreviewShot(
         val group: String?,
@@ -114,7 +119,12 @@ abstract class LayoutlibRenderTask : DefaultTask() {
 
 
         val manifestFile = kspManifest.orNull?.asFile?.takeIf { it.isFile } ?: return
-        val previewConfiguration = parsePreviewConfiguration(manifestFile.readText())
+        val previewConfiguration =
+            runCatching { json.decodeFromString<GalleryPreviews>(manifestFile.readText()) }
+                .getOrElse {
+                    logger.error("gallery: Error parsing manifest file", it)
+                    return
+                }
 
         val shots = buildPreviewShots(previewConfiguration)
         // Shots should be the list of Previews to render

@@ -1,15 +1,6 @@
 package com.dfcruz.compose.gallery.gradle
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.putJsonArray
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
@@ -31,10 +22,13 @@ abstract class AggregateGalleryTask : DefaultTask() {
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
+    private val json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = true
+    }
+
     @TaskAction
     fun aggregate() {
-        val json = Json { prettyPrint = true }
-
         val out = outputDir.get().asFile.apply { mkdirs() }
         val previewsOut = out.resolve("previews")
 
@@ -43,126 +37,69 @@ abstract class AggregateGalleryTask : DefaultTask() {
         }
         previewsOut.mkdirs()
 
-        val byModule = mutableMapOf<String, MutableList<JsonObject>>()
+        val modules = dependencyGalleryDirs.files
+            .mapNotNull { moduleGalleryDir ->
+                val galleryModule = readGalleryModule(moduleGalleryDir) ?: return@mapNotNull null
+                val moduleDirectory = sanitizeModulePath(galleryModule.module)
 
-        dependencyGalleryDirs.files.forEach { moduleGalleryDir ->
-            val manifest = moduleGalleryDir
-                .resolve("gallery-module.json")
-                .takeIf { it.isFile }
-                ?: return@forEach
-
-            val root = runCatching {
-                json.parseToJsonElement(manifest.readText()).jsonObject
-            }.getOrNull() ?: return@forEach
-
-            val module = root["module"]
-                ?.jsonPrimitive
-                ?.contentOrNull
-                ?.takeIf { it.isNotBlank() }
-                ?: return@forEach
-
-            val moduleDirectory = sanitizeModulePath(module)
-
-            val previews = root["previews"] as? JsonArray
-                ?: return@forEach
-
-            previews.forEach { element ->
-                val entry = element as? JsonObject
-                    ?: return@forEach
-
-                val aggregatedEntry = rewriteImagePaths(
-                    entry = entry,
+                copyModulePreviews(
+                    moduleGalleryDir = moduleGalleryDir,
                     moduleDirectory = moduleDirectory,
+                    previewsOut = previewsOut,
                 )
 
-                byModule
-                    .getOrPut(module) { mutableListOf() }
-                    .add(aggregatedEntry)
+                galleryModule.rewriteImagePaths(moduleDirectory)
+            }
+            .groupBy(GalleryModule::module)
+            .toSortedMap()
+            .map { (module, galleryModules) ->
+                AggregatedGalleryModule(
+                    module = module,
+                    previews = galleryModules
+                        .flatMap(GalleryModule::previews)
+                        .sortedBy(GalleryModulePreview::name),
+                )
             }
 
-            copyModulePreviews(
-                moduleGalleryDir = moduleGalleryDir,
-                moduleDirectory = moduleDirectory,
-                previewsOut = previewsOut,
-            )
-        }
-
-        val modules = buildJsonArray {
-            byModule.keys
-                .sorted()
-                .forEach { module ->
-                    add(
-                        buildJsonObject {
-                            put("module", JsonPrimitive(module))
-                            putJsonArray("previews") {
-                                byModule[module]
-                                    ?.sortedBy { preview ->
-                                        preview["name"]
-                                            ?.jsonPrimitive
-                                            ?.contentOrNull
-                                            ?: ""
-                                    }
-                                    ?.forEach { preview ->
-                                        add(preview)
-                                    }
-                            }
-                        }
-                    )
-                }
-        }
-
-        val merged = buildJsonObject {
-            put("modules", modules)
-        }
+        val merged = AggregatedGallery(modules)
 
         out.resolve("gallery.json").writeText(
-            json.encodeToString(
-                JsonObject.serializer(),
-                merged,
-            )
+            json.encodeToString(AggregatedGallery.serializer(), merged)
         )
 
-        val totalPreviews = byModule.values.sumOf { it.size }
-        val totalModules = byModule.size
+        val totalPreviews = modules.sumOf { it.previews.size }
+        val totalModules = modules.size
         logger.lifecycle("gallery: aggregated $totalPreviews preview(s) across $totalModules module(s).")
     }
 
-    private fun rewriteImagePaths(
-        entry: JsonObject,
-        moduleDirectory: String,
-    ): JsonObject {
-        val variants = entry["variants"] as? JsonArray
-            ?: return entry
+    private fun readGalleryModule(moduleGalleryDir: File): GalleryModule? {
+        val manifest = moduleGalleryDir
+            .resolve("gallery-module.json")
+            .takeIf { it.isFile }
+            ?: return null
 
-        val rewrittenVariants = buildJsonArray {
-            variants.forEach { element ->
-                val variant = element as? JsonObject
-                    ?: return@forEach
-
-                val image = variant["image"]
-                    ?.jsonPrimitive
-                    ?.contentOrNull
-
-                val rewrittenVariant = if (!image.isNullOrBlank()) {
-                    JsonObject(
-                        variant + (
-                                "image" to JsonPrimitive(
-                                    "previews/$moduleDirectory/${image.removePrefix("previews/")}"
-                                )
-                                )
-                    )
-                } else {
-                    variant
-                }
-
-                add(rewrittenVariant)
-            }
-        }
-
-        return JsonObject(
-            entry + ("variants" to rewrittenVariants)
-        )
+        return runCatching {
+            json.decodeFromString<GalleryModule>(manifest.readText())
+        }.getOrNull()
+            ?.takeIf { it.module.isNotBlank() }
     }
+
+    private fun GalleryModule.rewriteImagePaths(
+        moduleDirectory: String,
+    ): GalleryModule = copy(
+        previews = previews.map { preview ->
+            preview.copy(
+                variants = preview.variants.map { variant ->
+                    val image = variant.image
+                    if (image.isNullOrBlank()) variant else {
+                        variant.copy(
+                            image = "previews/$moduleDirectory/${image.removePrefix("previews/")}",
+                        )
+                    }
+                },
+            )
+        },
+    )
 
     private fun copyModulePreviews(
         moduleGalleryDir: File,

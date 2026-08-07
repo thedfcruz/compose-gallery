@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class GalleryModule(
     val version: Int = 1,
-    val module: String, //":app"
+    val module: String,
     val previews: List<GalleryModulePreview>,
 )
 
