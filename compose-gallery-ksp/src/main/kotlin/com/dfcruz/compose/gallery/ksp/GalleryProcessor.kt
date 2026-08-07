@@ -1,8 +1,8 @@
 package com.dfcruz.compose.gallery.ksp
 
-import com.dfcruz.compose.gallery.protocol.GalleryMetadata
-import com.dfcruz.compose.gallery.protocol.GalleryPreview
-import com.dfcruz.compose.gallery.protocol.PreviewVariant
+import com.dfcruz.compose.gallery.ksp.model.GalleryMetadata
+import com.dfcruz.compose.gallery.ksp.model.GalleryPreview
+import com.dfcruz.compose.gallery.ksp.model.PreviewVariant
 import com.google.devtools.ksp.getClassDeclarationByName
 import com.google.devtools.ksp.processing.CodeGenerator
 import com.google.devtools.ksp.processing.Dependencies

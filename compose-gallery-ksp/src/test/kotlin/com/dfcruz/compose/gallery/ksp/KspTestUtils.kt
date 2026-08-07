@@ -1,6 +1,6 @@
 package com.dfcruz.compose.gallery.ksp
 
-import com.dfcruz.compose.gallery.protocol.GalleryMetadata
+import com.dfcruz.compose.gallery.ksp.model.GalleryMetadata
 import com.tschuchort.compiletesting.KotlinCompilation
 import com.tschuchort.compiletesting.SourceFile
 import com.tschuchort.compiletesting.configureKsp

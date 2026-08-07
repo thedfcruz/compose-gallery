@@ -1,7 +1,7 @@
 package com.dfcruz.compose.gallery.ksp
 
-import com.dfcruz.compose.gallery.protocol.GalleryPreview
-import com.dfcruz.compose.gallery.protocol.PreviewVariant
+import com.dfcruz.compose.gallery.ksp.model.GalleryPreview
+import com.dfcruz.compose.gallery.ksp.model.PreviewVariant
 import org.jetbrains.kotlin.compiler.plugin.ExperimentalCompilerApi
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

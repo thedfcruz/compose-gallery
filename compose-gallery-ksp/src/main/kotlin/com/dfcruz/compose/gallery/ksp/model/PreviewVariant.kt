@@ -1,4 +1,4 @@
-package com.dfcruz.compose.gallery.protocol
+package com.dfcruz.compose.gallery.ksp.model
 
 import kotlinx.serialization.Serializable
 

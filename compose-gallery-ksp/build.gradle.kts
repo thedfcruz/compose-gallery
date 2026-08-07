@@ -15,7 +15,6 @@ kotlin {
 
 dependencies {
     implementation(project(":compose-gallery-annotations"))
-    implementation(project(":compose-gallery-protocol"))
 
     implementation(libs.ksp.api)
     implementation(libs.kotlinx.serialization.json)
