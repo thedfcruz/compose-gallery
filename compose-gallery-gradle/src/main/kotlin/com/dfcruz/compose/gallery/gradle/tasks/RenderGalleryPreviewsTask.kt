@@ -27,6 +27,7 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.OutputDirectory
@@ -66,9 +67,9 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
     @get:Internal
     abstract val rClassPath: ConfigurableFileCollection
 
-    /** The linked resources `.ap_` (from the unit-test resource link) so Layoutlib resolves `@string`/themes/etc.
-     *  `@Internal` for the same `build/intermediates` overlap reason as [rClassPath]. */
-    @get:Internal
+    /** The selected Android variant's processed resource package. */
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val resourceApk: ConfigurableFileCollection
 
     @get:Input
@@ -79,6 +80,9 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
 
     @get:Input
     abstract val module: Property<String>
+
+    @get:Input
+    abstract val variant: Property<String>
 
     /** Maximum time for the Layoutlib process to produce results. */
     @get:Input
@@ -150,13 +154,13 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
 
         logger.info("gallery: running number of shots:${shots.size}")
 
-        if (resourceApk.files.none { it.isFile }) {
-            logger.warn(
-                "gallery: no unit-test linked resources (.ap_) found — previews " +
-                        "using @string/@drawable/themes may render blank. Enable " +
-                        "android.testOptions.unitTests.isIncludeAndroidResources = true.",
+        val resourceApkFile = resourceApk.files.singleOrNull()
+            ?: throw GradleException(
+                "gallery: no processed resource APK was found for '${module.get()}' variant '${variant.get()}'. " +
+                        "Layoutlib cannot render previews without it. Enable " +
+                        "Android resource processing for this variant or use a supported Android Gradle Plugin version.",
             )
-        }
+
         if (namespace.get().isBlank()) {
             logger.warn(
                 "gallery: could not resolve this module's android namespace — its own R resources may not render.",
@@ -177,7 +181,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
                 (projectClasspath.files + rClassPath.files).forEach { add(it.absolutePath) }
             }
             put("namespace", namespace.get())
-            put("resourceApkPath", resourceApk.files.firstOrNull { it.isFile }?.absolutePath ?: "")
+            put("resourceApkPath", resourceApkFile.absolutePath)
             put("resultsFilePath", resultsFile.absolutePath)
             putJsonArray("screenshots") {
                 shots.forEach { s ->
