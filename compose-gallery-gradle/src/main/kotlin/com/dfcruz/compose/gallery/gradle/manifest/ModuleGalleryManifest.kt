@@ -1,6 +1,12 @@
 package com.dfcruz.compose.gallery.gradle.manifest
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+private val moduleGalleryManifestJson = Json { ignoreUnknownKeys = true }
+
+internal fun parseModuleGalleryManifest(text: String): ModuleGalleryManifest =
+    moduleGalleryManifestJson.decodeFromString(text)
 
 @Serializable
 data class ModuleGalleryManifest(

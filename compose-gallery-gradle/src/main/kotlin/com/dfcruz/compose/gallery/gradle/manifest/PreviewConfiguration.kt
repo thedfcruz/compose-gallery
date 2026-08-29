@@ -1,6 +1,12 @@
 package com.dfcruz.compose.gallery.gradle.manifest
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+private val previewConfigurationJson = Json { ignoreUnknownKeys = true }
+
+internal fun parsePreviewConfiguration(text: String): PreviewConfiguration =
+    previewConfigurationJson.decodeFromString(text)
 
 @Serializable
 data class PreviewConfiguration(

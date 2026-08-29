@@ -4,6 +4,8 @@ import com.dfcruz.compose.gallery.gradle.manifest.GalleryIndex
 import com.dfcruz.compose.gallery.gradle.manifest.GalleryIndexModule
 import com.dfcruz.compose.gallery.gradle.manifest.GalleryPreview
 import com.dfcruz.compose.gallery.gradle.manifest.ModuleGalleryManifest
+import com.dfcruz.compose.gallery.gradle.manifest.parseModuleGalleryManifest
+import com.dfcruz.compose.gallery.gradle.internal.aggregation.GalleryManifestTransformer
 import kotlinx.serialization.json.Json
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
@@ -44,7 +46,7 @@ abstract class AggregateGalleryTask : DefaultTask() {
         val modules = moduleGalleryDirectories.files
             .mapNotNull { moduleGalleryDir ->
                 val galleryModule = readGalleryModule(moduleGalleryDir) ?: return@mapNotNull null
-                val moduleDirectory = sanitizeModulePath(galleryModule.module)
+                val moduleDirectory = GalleryManifestTransformer.moduleDirectory(galleryModule.module)
 
                 copyModulePreviews(
                     moduleGalleryDir = moduleGalleryDir,
@@ -52,7 +54,7 @@ abstract class AggregateGalleryTask : DefaultTask() {
                     previewsOut = previewsOut,
                 )
 
-                galleryModule.rewriteImagePaths(moduleDirectory)
+                GalleryManifestTransformer.rewriteImagePaths(galleryModule, moduleDirectory)
             }
             .groupBy(ModuleGalleryManifest::module)
             .toSortedMap()
@@ -82,28 +84,9 @@ abstract class AggregateGalleryTask : DefaultTask() {
             .takeIf { it.isFile }
             ?: return null
 
-        return runCatching {
-            json.decodeFromString<ModuleGalleryManifest>(manifest.readText())
-        }.getOrNull()
+        return runCatching { parseModuleGalleryManifest(manifest.readText()) }.getOrNull()
             ?.takeIf { it.module.isNotBlank() }
     }
-
-    private fun ModuleGalleryManifest.rewriteImagePaths(
-        moduleDirectory: String,
-    ): ModuleGalleryManifest = copy(
-        previews = previews.map { preview ->
-            preview.copy(
-                variants = preview.variants.map { variant ->
-                    val image = variant.image
-                    if (image.isNullOrBlank()) variant else {
-                        variant.copy(
-                            image = "previews/$moduleDirectory/${image.removePrefix("previews/")}",
-                        )
-                    }
-                },
-            )
-        },
-    )
 
     private fun copyModulePreviews(
         moduleGalleryDir: File,
@@ -130,16 +113,4 @@ abstract class AggregateGalleryTask : DefaultTask() {
             }
     }
 
-    private fun sanitizeModulePath(module: String): String =
-        module
-            .removePrefix(":")
-            .split(":")
-            .filter { it.isNotBlank() }
-            .joinToString("_") { sanitizeFileName(it) }
-            .ifBlank { "root" }
-
-    private fun sanitizeFileName(name: String): String =
-        name.trim()
-            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
-            .replace(Regex("_+"), "_")
 }

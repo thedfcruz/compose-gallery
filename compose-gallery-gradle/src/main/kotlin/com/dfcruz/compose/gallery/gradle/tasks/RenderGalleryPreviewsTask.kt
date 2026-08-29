@@ -7,17 +7,15 @@ import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfiguration
 import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationEntry
 import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationVariant
 import com.dfcruz.compose.gallery.gradle.manifest.RenderedPreviewVariant
+import com.dfcruz.compose.gallery.gradle.manifest.parsePreviewConfiguration
+import com.dfcruz.compose.gallery.gradle.internal.layoutlib.LayoutlibResultsParser
 import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.COMPOSE_VIEW_ADAPTER
 import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.RENDER_TIMEOUT_MINUTES
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -127,7 +125,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
 
         val manifestFile = previewConfigurationFile.orNull?.asFile?.takeIf { it.isFile } ?: return
         val previewConfiguration =
-            runCatching { json.decodeFromString<PreviewConfiguration>(manifestFile.readText()) }
+            runCatching { parsePreviewConfiguration(manifestFile.readText()) }
                 .getOrElse {
                     logger.error("gallery: Error parsing manifest file", it)
                     return
@@ -232,7 +230,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
                 exitedOnOwn = true
                 break
             }
-            val results = if (resultsFile.isFile) readLayoutlibResults(resultsFile) else emptyMap()
+            val results = LayoutlibResultsParser.read(resultsFile)
             if (results.keys.containsAll(wantedIds)) break
             // Stall guard: a Compose-Multiplatform preview Layoutlib can't draw hangs the renderer mid-preview, so
             // results.json stops growing. If no NEW preview has landed for RENDER_STALL_SECONDS, give up (in AUTO the
@@ -259,7 +257,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
             else -> "killed after completion"
         }
 
-        val byId = readLayoutlibResults(resultsFile)
+        val byId = LayoutlibResultsParser.read(resultsFile)
 
         val renderedVariants = mutableMapOf<String, RenderedPreviewVariant>()
         var ok = 0
@@ -268,7 +266,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
         shots.forEach { s ->
             val res = byId[s.id]
             val img = res?.imagePath?.let { pngDir.resolve(it) }
-            val success = isLayoutlibSuccess(res, img)
+            val success = LayoutlibResultsParser.isSuccess(res, img)
 
             val previewName = sanitizeFileName(s.preview.name)
             val variantName = sanitizeFileName(s.name)
@@ -412,78 +410,6 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
         const val COMPOSE_VIEW_ADAPTER: String = "androidx.compose.ui.tooling.ComposeViewAdapter"
     }
 
-    /**
-     * One entry of the Layoutlib renderer's `results.json` (`screenshotResults[]`), keyed by `previewId`. The
-     * single source of truth for "which previews Layoutlib failed" — shared by [RenderGalleryPreviewsTask] (which copies
-     * the successful PNGs) and the `prepareNavGraphRobolectricRenderList` action (which re-renders the failures under
-     * Robolectric in `AUTO` mode).
-     */
-    internal data class ShotResult(
-        val imagePath: String?,
-        val status: String?,
-        val brokenClasses: List<String>,
-        val missingClasses: List<String>,
-        val problems: List<String>,
-        val message: String?,
-    )
-
-    internal fun isLayoutlibSuccess(result: ShotResult?, image: File?): Boolean =
-        result != null && (result.status == null || result.status == "SUCCESS") &&
-                result.brokenClasses.isEmpty() && result.problems.isEmpty() &&
-                result.missingClasses.none { it.endsWith("ComposeViewAdapter") } &&
-                image != null && image.isFile && image.length() > 0L
-
-
-    /**
-     * Parse the renderer's `results.json` (`screenshotResults[]`) → `previewId` → image + render status. The `error`
-     * object is present even on success (status SUCCESS); `brokenClasses` lists classes Layoutlib failed to load
-     * (⇒ an error placeholder, not a real render), `missingClasses` lists classes the renderer couldn't find at all
-     * (the preview host [COMPOSE_VIEW_ADAPTER] lands here), and `problems` carries non-fatal-looking layout/measure
-     * failures.
-     */
-    internal fun readLayoutlibResults(file: File): Map<String, ShotResult> {
-        if (!file.isFile) return emptyMap()
-        val root = runCatching { Json.parseToJsonElement(file.readText()).jsonObject }
-            .getOrNull() ?: return emptyMap()
-        val arr = root["screenshotResults"] as? JsonArray ?: return emptyMap()
-        return arr.mapNotNull { el ->
-            val o = el.jsonObject
-
-            val id = o.str("previewId") ?: return@mapNotNull null
-            val err = o["error"] as? JsonObject
-            val broken =
-                (err?.get("brokenClasses") as? JsonArray)?.mapNotNull {
-                    (it as? JsonObject)?.str("className")
-                }
-                    ?: emptyList()
-            // The renderer reports an absent class (incl. the preview host ComposeViewAdapter) here — as bare strings, NOT
-            // in `brokenClasses` — and still reports SUCCESS with a placeholder image, so this field must be parsed too.
-            val missing =
-                (err?.get("missingClasses") as? JsonArray)?.mapNotNull {
-                    (it as? JsonPrimitive)?.contentOrNull ?: (it as? JsonObject)?.str("className")
-                }
-                    ?: emptyList()
-            val problems = (err?.get("problems") as? JsonArray)?.mapNotNull { p ->
-                (p as? JsonObject)?.let {
-                    it.str("stackTrace")?.lineSequence()?.firstOrNull()
-                        ?.takeIf { l -> l.isNotBlank() }
-                        ?: it.str("html")
-                }
-            } ?: emptyList()
-            val message =
-                err?.str("message")?.takeIf { it.isNotBlank() }
-                    ?: err?.str("stackTrace")?.takeIf { it.isNotBlank() }
-            id to ShotResult(
-                o.str("imagePath"),
-                err?.str("status"),
-                broken,
-                missing,
-                problems,
-                message,
-            )
-        }.toMap()
-    }
-
     private fun buildPreviewShots(previewConfiguration: PreviewConfiguration): List<PreviewShot> =
         buildList {
             previewConfiguration.previews.forEach { preview ->
@@ -526,6 +452,4 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
             .replace(Regex("[^A-Za-z0-9._-]+"), "_")
             .replace(Regex("_+"), "_")
 
-
-    private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
 }
