@@ -1,16 +1,16 @@
-package com.dfcruz.compose.gallery.gradle
+package com.dfcruz.compose.gallery.gradle.manifest
 
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class GalleryModule(
+data class ModuleGalleryManifest(
     val version: Int = 1,
     val module: String,
-    val previews: List<GalleryModulePreview>,
+    val previews: List<GalleryPreview>,
 )
 
 @Serializable
-data class GalleryModulePreview(
+data class GalleryPreview(
     val id: String,
     val name: String,
     val group: String,
@@ -19,11 +19,11 @@ data class GalleryModulePreview(
     val qualifiedName: String,
     val packageName: String,
     val fileName: String,
-    val variants: List<GalleryModuleVariant>,
+    val variants: List<RenderedPreviewVariant>,
 )
 
 @Serializable
-data class GalleryModuleVariant(
+data class RenderedPreviewVariant(
     val name: String,
     val status: GalleryRenderStatus,
     val image: String? = null,

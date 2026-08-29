@@ -1,5 +1,9 @@
-package com.dfcruz.compose.gallery.gradle
+package com.dfcruz.compose.gallery.gradle.tasks
 
+import com.dfcruz.compose.gallery.gradle.manifest.GalleryIndex
+import com.dfcruz.compose.gallery.gradle.manifest.GalleryIndexModule
+import com.dfcruz.compose.gallery.gradle.manifest.GalleryPreview
+import com.dfcruz.compose.gallery.gradle.manifest.ModuleGalleryManifest
 import kotlinx.serialization.json.Json
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
@@ -17,7 +21,7 @@ abstract class AggregateGalleryTask : DefaultTask() {
 
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val dependencyGalleryDirs: ConfigurableFileCollection
+    abstract val moduleGalleryDirectories: ConfigurableFileCollection
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
@@ -37,7 +41,7 @@ abstract class AggregateGalleryTask : DefaultTask() {
         }
         previewsOut.mkdirs()
 
-        val modules = dependencyGalleryDirs.files
+        val modules = moduleGalleryDirectories.files
             .mapNotNull { moduleGalleryDir ->
                 val galleryModule = readGalleryModule(moduleGalleryDir) ?: return@mapNotNull null
                 val moduleDirectory = sanitizeModulePath(galleryModule.module)
@@ -50,21 +54,21 @@ abstract class AggregateGalleryTask : DefaultTask() {
 
                 galleryModule.rewriteImagePaths(moduleDirectory)
             }
-            .groupBy(GalleryModule::module)
+            .groupBy(ModuleGalleryManifest::module)
             .toSortedMap()
             .map { (module, galleryModules) ->
-                AggregatedGalleryModule(
+                GalleryIndexModule(
                     module = module,
                     previews = galleryModules
-                        .flatMap(GalleryModule::previews)
-                        .sortedBy(GalleryModulePreview::name),
+                        .flatMap(ModuleGalleryManifest::previews)
+                        .sortedBy(GalleryPreview::name),
                 )
             }
 
-        val merged = AggregatedGallery(modules)
+        val merged = GalleryIndex(modules)
 
         out.resolve("gallery.json").writeText(
-            json.encodeToString(AggregatedGallery.serializer(), merged)
+            json.encodeToString(GalleryIndex.serializer(), merged)
         )
 
         val totalPreviews = modules.sumOf { it.previews.size }
@@ -72,21 +76,21 @@ abstract class AggregateGalleryTask : DefaultTask() {
         logger.lifecycle("gallery: aggregated $totalPreviews preview(s) across $totalModules module(s).")
     }
 
-    private fun readGalleryModule(moduleGalleryDir: File): GalleryModule? {
+    private fun readGalleryModule(moduleGalleryDir: File): ModuleGalleryManifest? {
         val manifest = moduleGalleryDir
             .resolve("gallery-module.json")
             .takeIf { it.isFile }
             ?: return null
 
         return runCatching {
-            json.decodeFromString<GalleryModule>(manifest.readText())
+            json.decodeFromString<ModuleGalleryManifest>(manifest.readText())
         }.getOrNull()
             ?.takeIf { it.module.isNotBlank() }
     }
 
-    private fun GalleryModule.rewriteImagePaths(
+    private fun ModuleGalleryManifest.rewriteImagePaths(
         moduleDirectory: String,
-    ): GalleryModule = copy(
+    ): ModuleGalleryManifest = copy(
         previews = previews.map { preview ->
             preview.copy(
                 variants = preview.variants.map { variant ->

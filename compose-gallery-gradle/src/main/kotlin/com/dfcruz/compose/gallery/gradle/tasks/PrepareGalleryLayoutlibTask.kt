@@ -1,4 +1,4 @@
-package com.dfcruz.compose.gallery.gradle
+package com.dfcruz.compose.gallery.gradle.tasks
 
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ArchiveOperations
@@ -23,7 +23,7 @@ import javax.inject.Inject
  * Pinned + cached: the inputs are immutable published artifacts, so after the first run Gradle's up-to-date
  * check skips it. Not `@CacheableTask` — the ~80 MB unpacked tree shouldn't bloat a shared build cache.
  */
-abstract class PrepareLayoutlibTask : DefaultTask() {
+abstract class PrepareGalleryLayoutlibTask : DefaultTask() {
 
     /** The OS-classifier `layoutlib-runtime` jar (`mac-arm`/`mac`/`linux`/`win`) — unpacked to [layoutlibDir]. */
     @get:Classpath

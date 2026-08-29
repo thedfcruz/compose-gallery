@@ -13,7 +13,7 @@ gradlePlugin {
             id = "com.dfcruz.compose.gallery"
             displayName = "Compose Component Gallery"
             description = "Generates a Gallery of Components"
-            implementationClass = "com.dfcruz.compose.gallery.gradle.ComposePreviewGalleryPlugin"
+            implementationClass = "com.dfcruz.compose.gallery.gradle.ComposeGalleryPlugin"
         }
     }
 }

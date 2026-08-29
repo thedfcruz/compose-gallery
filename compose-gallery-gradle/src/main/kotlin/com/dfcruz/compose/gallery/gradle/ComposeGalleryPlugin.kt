@@ -1,5 +1,8 @@
 package com.dfcruz.compose.gallery.gradle
 
+import com.dfcruz.compose.gallery.gradle.tasks.AggregateGalleryTask
+import com.dfcruz.compose.gallery.gradle.tasks.PrepareGalleryLayoutlibTask
+import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
@@ -9,27 +12,27 @@ import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.Provider
 import org.gradle.api.tasks.TaskProvider
 
-abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
+abstract class ComposeGalleryPlugin : Plugin<Project> {
 
     override fun apply(target: Project) {
         with(target) {
             afterEvaluate {
                 val variant = androidVariant(this)
                 //validateRuntimeClasspath(this, variant)
-                val layoutlib = prepLayoutlib(this)
-                wire(this, layoutlib, variant)
+                val layoutlib = registerLayoutlibSetup(this)
+                configureGalleryPipeline(this, layoutlib, variant)
             }
         }
     }
 
-    private fun wire(
+    private fun configureGalleryPipeline(
         project: Project,
         layoutlib: LayoutlibSetup,
         androidVariant: String,
     ) {
         with(project) {
             val galleryDir = layout.buildDirectory.dir("gallery")
-            val previewsDir = galleryDir.map { it.dir("previews") }
+            val thumbnailsDirectory = galleryDir.map { it.dir("previews") }
 
             val kspManifestFile =
                 layout.buildDirectory.file(
@@ -42,7 +45,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
                 setup = layoutlib,
                 manifestFile = kspManifestFile,
                 scratchDir = layout.buildDirectory.dir("preview-render"),
-                previewsDir = previewsDir,
+                thumbnailsDirectory = thumbnailsDirectory,
             )
 
             registerWithRootAggregator(
@@ -62,7 +65,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
     private fun registerWithRootAggregator(
         project: Project,
         galleryDir: Provider<Directory>,
-        renderTask: TaskProvider<LayoutlibRenderTask>,
+        renderTask: TaskProvider<RenderGalleryPreviewsTask>,
     ) {
         val root = project.rootProject
 
@@ -83,7 +86,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
             }
 
         aggregateTask.configure {
-            dependencyGalleryDirs.from(galleryDir)
+            moduleGalleryDirectories.from(galleryDir)
             dependsOn(renderTask)
         }
 
@@ -115,7 +118,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
             )
     }
 
-    private fun prepLayoutlib(project: Project): LayoutlibSetup {
+    private fun registerLayoutlibSetup(project: Project): LayoutlibSetup {
         with(project) {
             // The renderer's own classpath: the standalone preview renderer + the Layoutlib framework classes.
             val renderer = configurations.maybeCreate("galleryLayoutlibRenderer").apply {
@@ -149,7 +152,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
                 "com.android.tools.layoutlib:layoutlib-resources:$LAYOUTLIB_VERSION",
             )
             val prepare =
-                tasks.register("prepareGalleryLayoutlib", PrepareLayoutlibTask::class.java) {
+                tasks.register("prepareGalleryLayoutlib", PrepareGalleryLayoutlibTask::class.java) {
                     runtimeJar.from(runtimeCfg)
                     resourcesJar.from(resourcesCfg)
                     layoutlibDir.set(layout.buildDirectory.dir("preview-layoutlib"))
@@ -159,8 +162,8 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
         }
     }
 
-    /** Register + configure a [LayoutlibRenderTask] instance: the shared renderer/prepare from [setup], pointed at
-     *  this pipeline's [manifestFile] / scratch [scratchDir] / [previewsDir] / [indexOut], plus the variant's
+    /** Register + configure a [RenderGalleryPreviewsTask] instance: the shared renderer/prepare from [setup], pointed at
+     *  this pipeline's [manifestFile] / scratch [scratchDir] / [thumbnailsDirectory] / [indexOut], plus the variant's
      *  app/project/R classpath + linked resources (identical for both pipelines — same module/variant). KMP feeds
      *  the consuming app's resources via [wireKmpConsumerResources]. */
     private fun registerLayoutlibRender(
@@ -169,21 +172,21 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
         setup: LayoutlibSetup,
         manifestFile: Provider<RegularFile>,
         scratchDir: Provider<Directory>,
-        previewsDir: Provider<Directory>,
-    ): TaskProvider<LayoutlibRenderTask> {
+        thumbnailsDirectory: Provider<Directory>,
+    ): TaskProvider<RenderGalleryPreviewsTask> {
         with(project) {
             val artifactType = Attribute.of("artifactType", String::class.java)
 
             val renderTask =
-                tasks.register("renderGalleryLayoutlib", LayoutlibRenderTask::class.java) {
-                    kspManifest.set(manifestFile)
+                tasks.register("renderGalleryLayoutlib", RenderGalleryPreviewsTask::class.java) {
+                    previewConfigurationFile.set(manifestFile)
                     rendererClasspath.from(setup.renderer)
                     layoutlibDir.set(setup.prepare.flatMap { it.layoutlibDir })
                     namespace.set(androidNamespace())
                     apiLevel.set(LAYOUTLIB_API)
                     module.set(project.path)
                     workDir.set(scratchDir)
-                    this.previewsDir.set(previewsDir)
+                    this.thumbnailsDirectory.set(thumbnailsDirectory)
 
                     val kspTaskName = "ksp${variant.replaceFirstChar { it.uppercase() }}Kotlin"
                     dependsOn(setup.prepare)
@@ -278,7 +281,7 @@ abstract class ComposePreviewGalleryPlugin : Plugin<Project> {
 
     /** The Layoutlib renderer classpath + the prepare task, created once and shared by both render pipelines. */
     private data class LayoutlibSetup(
-        val prepare: TaskProvider<PrepareLayoutlibTask>,
+        val prepare: TaskProvider<PrepareGalleryLayoutlibTask>,
         val renderer: Configuration,
     )
 

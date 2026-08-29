@@ -1,7 +1,14 @@
-package com.dfcruz.compose.gallery.gradle
+package com.dfcruz.compose.gallery.gradle.tasks
 
-import com.dfcruz.compose.gallery.gradle.LayoutlibRenderTask.Companion.COMPOSE_VIEW_ADAPTER
-import com.dfcruz.compose.gallery.gradle.LayoutlibRenderTask.Companion.RENDER_TIMEOUT_MINUTES
+import com.dfcruz.compose.gallery.gradle.manifest.GalleryPreview
+import com.dfcruz.compose.gallery.gradle.manifest.GalleryRenderStatus
+import com.dfcruz.compose.gallery.gradle.manifest.ModuleGalleryManifest
+import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfiguration
+import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationEntry
+import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationVariant
+import com.dfcruz.compose.gallery.gradle.manifest.RenderedPreviewVariant
+import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.COMPOSE_VIEW_ADAPTER
+import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.RENDER_TIMEOUT_MINUTES
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -32,14 +39,14 @@ import org.gradle.api.tasks.TaskAction
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-abstract class LayoutlibRenderTask : DefaultTask() {
+abstract class RenderGalleryPreviewsTask : DefaultTask() {
 
     @get:InputFile
     @get:Optional
     @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val kspManifest: RegularFileProperty
+    abstract val previewConfigurationFile: RegularFileProperty
 
-    /** The unpacked Layoutlib data dir from [LayoutlibRenderTask]; pinned + constant, so tracked by version only. */
+    /** The unpacked Layoutlib data dir from [RenderGalleryPreviewsTask]; pinned + constant, so tracked by version only. */
     @get:Internal
     abstract val layoutlibDir: DirectoryProperty
 
@@ -81,7 +88,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
     abstract val workDir: DirectoryProperty
 
     @get:OutputDirectory
-    abstract val previewsDir: DirectoryProperty
+    abstract val thumbnailsDirectory: DirectoryProperty
 
     private val json by lazy {
         Json {
@@ -99,8 +106,8 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         val widthDp: Int?,
         val heightDp: Int?,
         val device: String?,
-        val preview: GalleryPreviewDetails,
-        val variant: PreviewVariantDetails,
+        val preview: PreviewConfigurationEntry,
+        val variant: PreviewConfigurationVariant,
         val variantIndex: Int,
     )
 
@@ -112,15 +119,15 @@ abstract class LayoutlibRenderTask : DefaultTask() {
                     "Point your Gradle JVM (org.gradle.java.home, or a Java toolchain) at 17 or newer."
         }
 
-        val thumbs = previewsDir.get().asFile.apply { mkdirs() }
+        val thumbs = thumbnailsDirectory.get().asFile.apply { mkdirs() }
         // This render is authoritative for the thumbnails — drop stale PNGs (renamed/removed previews) so they don't
         // linger after a renderer rename/move.
         thumbs.listFiles()?.forEach { if (it.name.endsWith(".png")) it.delete() }
 
 
-        val manifestFile = kspManifest.orNull?.asFile?.takeIf { it.isFile } ?: return
+        val manifestFile = previewConfigurationFile.orNull?.asFile?.takeIf { it.isFile } ?: return
         val previewConfiguration =
-            runCatching { json.decodeFromString<GalleryPreviews>(manifestFile.readText()) }
+            runCatching { json.decodeFromString<PreviewConfiguration>(manifestFile.readText()) }
                 .getOrElse {
                     logger.error("gallery: Error parsing manifest file", it)
                     return
@@ -254,7 +261,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
 
         val byId = readLayoutlibResults(resultsFile)
 
-        val renderedVariants = mutableMapOf<String, GalleryModuleVariant>()
+        val renderedVariants = mutableMapOf<String, RenderedPreviewVariant>()
         var ok = 0
         var failed = 0
 
@@ -279,7 +286,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
                     overwrite = true,
                 )
 
-                renderedVariants[s.id] = GalleryModuleVariant(
+                renderedVariants[s.id] = RenderedPreviewVariant(
                     name = s.name,
                     status = GalleryRenderStatus.SUCCESS,
                     image = imagePath,
@@ -312,7 +319,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
                         "No image produced"
                 }
 
-                renderedVariants[s.id] = GalleryModuleVariant(
+                renderedVariants[s.id] = RenderedPreviewVariant(
                     name = s.name,
                     status = GalleryRenderStatus.FAILED,
                     error = error,
@@ -343,7 +350,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
             renderedVariants = renderedVariants,
         )
 
-        val galleryModuleFile = previewsDir
+        val galleryModuleFile = thumbnailsDirectory
             .get()
             .asFile
             .parentFile
@@ -351,20 +358,20 @@ abstract class LayoutlibRenderTask : DefaultTask() {
 
         galleryModuleFile.writeText(
             json.encodeToString(
-                GalleryModule.serializer(),
+                ModuleGalleryManifest.serializer(),
                 galleryModule,
             )
         )
     }
 
     private fun buildGalleryModule(
-        previews: GalleryPreviews,
-        renderedVariants: Map<String, GalleryModuleVariant>,
-    ): GalleryModule {
-        return GalleryModule(
+        previews: PreviewConfiguration,
+        renderedVariants: Map<String, RenderedPreviewVariant>,
+    ): ModuleGalleryManifest {
+        return ModuleGalleryManifest(
             module = module.get(),
             previews = previews.previews.map { preview ->
-                GalleryModulePreview(
+                GalleryPreview(
                     id = preview.id,
                     name = preview.name,
                     group = preview.group,
@@ -377,7 +384,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
                         val shotId = "${preview.id.ifBlank { preview.qualifiedName }}-$index"
 
                         renderedVariants[shotId]
-                            ?: GalleryModuleVariant(
+                            ?: RenderedPreviewVariant(
                                 name = variant.name.ifEmpty {
                                     preview.name.ifEmpty { preview.simpleName }
                                 },
@@ -407,7 +414,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
 
     /**
      * One entry of the Layoutlib renderer's `results.json` (`screenshotResults[]`), keyed by `previewId`. The
-     * single source of truth for "which previews Layoutlib failed" — shared by [LayoutlibRenderTask] (which copies
+     * single source of truth for "which previews Layoutlib failed" — shared by [RenderGalleryPreviewsTask] (which copies
      * the successful PNGs) and the `prepareNavGraphRobolectricRenderList` action (which re-renders the failures under
      * Robolectric in `AUTO` mode).
      */
@@ -477,7 +484,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         }.toMap()
     }
 
-    private fun buildPreviewShots(previewConfiguration: GalleryPreviews): List<PreviewShot> =
+    private fun buildPreviewShots(previewConfiguration: PreviewConfiguration): List<PreviewShot> =
         buildList {
             previewConfiguration.previews.forEach { preview ->
                 val methodFqn = preview.previewMethodQualifiedName
@@ -518,7 +525,7 @@ abstract class LayoutlibRenderTask : DefaultTask() {
         name.trim()
             .replace(Regex("[^A-Za-z0-9._-]+"), "_")
             .replace(Regex("_+"), "_")
+
+
+    private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
 }
-
-
-
