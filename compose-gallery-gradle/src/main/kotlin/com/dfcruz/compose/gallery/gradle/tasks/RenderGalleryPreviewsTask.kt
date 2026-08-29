@@ -1,5 +1,6 @@
 package com.dfcruz.compose.gallery.gradle.tasks
 
+import com.dfcruz.compose.gallery.gradle.internal.layoutlib.LayoutlibResultsParser
 import com.dfcruz.compose.gallery.gradle.manifest.GalleryPreview
 import com.dfcruz.compose.gallery.gradle.manifest.GalleryRenderStatus
 import com.dfcruz.compose.gallery.gradle.manifest.ModuleGalleryManifest
@@ -8,9 +9,6 @@ import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationEntry
 import com.dfcruz.compose.gallery.gradle.manifest.PreviewConfigurationVariant
 import com.dfcruz.compose.gallery.gradle.manifest.RenderedPreviewVariant
 import com.dfcruz.compose.gallery.gradle.manifest.parsePreviewConfiguration
-import com.dfcruz.compose.gallery.gradle.internal.layoutlib.LayoutlibResultsParser
-import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.COMPOSE_VIEW_ADAPTER
-import com.dfcruz.compose.gallery.gradle.tasks.RenderGalleryPreviewsTask.Companion.RENDER_TIMEOUT_MINUTES
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -20,6 +18,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.JavaVersion
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
@@ -81,6 +80,14 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
     @get:Input
     abstract val module: Property<String>
 
+    /** Maximum time for the Layoutlib process to produce results. */
+    @get:Input
+    abstract val renderTimeoutSeconds: Property<Int>
+
+    /** Whether one or more failed previews should fail the Gradle build. */
+    @get:Input
+    abstract val failOnRenderFailure: Property<Boolean>
+
     /** Scratch dir for the generated JSON + raw PNGs + results.json (not the consumed thumbnails). */
     @get:Internal
     abstract val workDir: DirectoryProperty
@@ -115,6 +122,9 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
             "gallery: the device-free Layoutlib renderer needs JDK 17+ to run Gradle " +
                     "(current: ${JavaVersion.current()}). " +
                     "Point your Gradle JVM (org.gradle.java.home, or a Java toolchain) at 17 or newer."
+        }
+        require(renderTimeoutSeconds.get() > 0) {
+            "gallery: renderTimeoutSeconds must be greater than zero."
         }
 
         val thumbs = thumbnailsDirectory.get().asFile.apply { mkdirs() }
@@ -225,7 +235,7 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
         var stalled = false
         var landed = 0
         var lastProgressAt = started
-        while (System.currentTimeMillis() - started < RENDER_TIMEOUT_MINUTES * 60_000L) {
+        while (System.currentTimeMillis() - started < renderTimeoutSeconds.get() * 1_000L) {
             if (process.waitFor(2, TimeUnit.SECONDS)) {
                 exitedOnOwn = true
                 break
@@ -360,6 +370,10 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
                 galleryModule,
             )
         )
+
+        if (failed > 0 && failOnRenderFailure.get()) {
+            throw GradleException("gallery: $failed preview(s) failed to render.")
+        }
     }
 
     private fun buildGalleryModule(
@@ -396,12 +410,9 @@ abstract class RenderGalleryPreviewsTask : DefaultTask() {
     }
 
     private companion object {
-        /** Hard cap on a single render run — bounds a genuinely stuck renderer (completion is detected far sooner). */
-        const val RENDER_TIMEOUT_MINUTES: Int = 10
-
         /** Give up if no new preview lands for this long. Layoutlib that can't draw a Compose-Multiplatform screen hangs
-         *  mid-preview; without this an all-CMP app burns the full [RENDER_TIMEOUT_MINUTES] before AUTO falls back to
-         *  Robolectric. Generous enough to clear renderer startup plus the slowest legitimate single preview. */
+         *  mid-preview; without this an all-CMP app burns the configured timeout before AUTO falls back to Robolectric.
+         *  Generous enough to clear renderer startup plus the slowest legitimate single preview. */
         const val RENDER_STALL_SECONDS: Int = 60
 
         /** The renderer's preview host. When it isn't on the render classpath the renderer emits a gray

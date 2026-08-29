@@ -16,11 +16,17 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
 
     override fun apply(target: Project) {
         with(target) {
+            val gallery = target.extensions.create("gallery", ComposeGalleryExtension::class.java)
+            gallery.variant.convention("debug")
+            gallery.failOnRenderFailure.convention(false)
+            gallery.renderTimeoutSeconds.convention(10 * 60)
+
             afterEvaluate {
-                val variant = androidVariant(this)
-                //validateRuntimeClasspath(this, variant)
+                val variant = gallery.variant.get().takeIf(String::isNotBlank)
+                    ?: error("gallery: variant must not be blank.")
+                validateRuntimeClasspath(this, variant)
                 val layoutlib = registerLayoutlibSetup(this)
-                configureGalleryPipeline(this, layoutlib, variant)
+                configureGalleryPipeline(this, layoutlib, variant, gallery)
             }
         }
     }
@@ -29,6 +35,7 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
         project: Project,
         layoutlib: LayoutlibSetup,
         androidVariant: String,
+        gallery: ComposeGalleryExtension,
     ) {
         with(project) {
             val galleryDir = layout.buildDirectory.dir("gallery")
@@ -42,6 +49,7 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
             val render = registerLayoutlibRender(
                 project = this,
                 variant = androidVariant,
+                gallery = gallery,
                 setup = layoutlib,
                 manifestFile = kspManifestFile,
                 scratchDir = layout.buildDirectory.dir("preview-render"),
@@ -99,16 +107,6 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
         }
     }
 
-
-    /** The Android variant to extract: an explicit `gallery { variant }`, else the first `…DebugKotlin` KSP task's
-     *  variant (so flavored projects work unconfigured), else `"debug"`. */
-    private fun androidVariant(project: Project): String {
-        return project.tasks.names
-            .filter { it.startsWith("ksp") && it.endsWith("DebugKotlin") && "Test" !in it }
-            .minOrNull()
-            ?.removePrefix("ksp")?.removeSuffix("Kotlin")?.replaceFirstChar { it.lowercase() }
-            ?: "debug"
-    }
 
     private fun validateRuntimeClasspath(project: Project, variant: String) {
         project.configurations.findByName("${variant}RuntimeClasspath")
@@ -169,6 +167,7 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
     private fun registerLayoutlibRender(
         project: Project,
         variant: String,
+        gallery: ComposeGalleryExtension,
         setup: LayoutlibSetup,
         manifestFile: Provider<RegularFile>,
         scratchDir: Provider<Directory>,
@@ -185,6 +184,8 @@ abstract class ComposeGalleryPlugin : Plugin<Project> {
                     namespace.set(androidNamespace())
                     apiLevel.set(LAYOUTLIB_API)
                     module.set(project.path)
+                    renderTimeoutSeconds.set(gallery.renderTimeoutSeconds)
+                    failOnRenderFailure.set(gallery.failOnRenderFailure)
                     workDir.set(scratchDir)
                     this.thumbnailsDirectory.set(thumbnailsDirectory)
 

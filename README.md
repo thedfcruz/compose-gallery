@@ -152,6 +152,24 @@ ksp(project(":compose-gallery-ksp"))
 The module must also have the normal Android, Kotlin Compose, and KSP configuration required by the
 project.
 
+### 3. Configure the plugin (optional)
+
+The plugin uses the `debug` variant, allows individual preview rendering failures, and waits up to
+600 seconds by default. Override those defaults with the `gallery` extension when needed:
+
+```kotlin
+gallery {
+    // Android variant whose previews are collected and rendered. Default: "debug".
+    variant.set("demoDebug")
+
+    // Fail the build when one or more previews cannot be rendered. Default: false.
+    failOnRenderFailure.set(true)
+
+    // Maximum time allowed for the renderer to finish, in seconds. Default: 600.
+    renderTimeoutSeconds.set(300)
+}
+```
+
 ## Gradle tasks
 
 Applying the Gallery Gradle plugin exposes tasks at both the module and root project levels.
